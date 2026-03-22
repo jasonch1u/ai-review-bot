@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { verifyWebhookSignature } from '@/lib/github/verify-webhook';
-import { createOctokitClient } from '@/lib/github/client';
+import { createInstallationClient } from '@/lib/github/app-auth';
 import { fetchPullRequestDiff } from '@/lib/github/pr-diff';
 import { enqueueReviewJob } from '@/lib/review/queue';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -67,14 +67,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: true, skipped: true });
   }
 
-  // Respond immediately, process async
+  // Respond immediately, process in background after response is sent
   const owner = repository.owner.login;
   const repo = repository.name;
   const pullNumber = pull_request.number;
   const installationId = installation.id;
 
-  // Fire-and-forget — we already returned 200
-  void processReview({ owner, repo, pullNumber, installationId });
+  // after() ensures background work completes even after response is returned
+  after(() => processReview({ owner, repo, pullNumber, installationId }));
 
   return NextResponse.json({ ok: true });
 }
@@ -91,13 +91,8 @@ async function processReview({
   installationId: number;
 }): Promise<void> {
   try {
-    // TODO: exchange installationId for an installation token via GitHub App JWT
-    // For now, use a static token from env (works for testing / single-install)
-    const token = process.env.GITHUB_INSTALLATION_TOKEN ?? '';
-    const octokit = createOctokitClient(token);
-
+    const octokit = await createInstallationClient(installationId);
     const pr = await fetchPullRequestDiff(octokit, owner, repo, pullNumber);
-
     await enqueueReviewJob({ installationId, pr });
   } catch (err) {
     console.error(`[webhook] Failed to process review for ${owner}/${repo}#${pullNumber}:`, err);
