@@ -1,5 +1,6 @@
 import type { PullRequestInfo } from '@/lib/github/pr-diff';
-import { createOctokitClient } from '@/lib/github/client';
+import { createInstallationClient } from '@/lib/github/app-auth';
+import type { Octokit } from '@octokit/rest';
 import { reviewPullRequest } from './claude-reviewer';
 import { postReviewToPullRequest } from './github-commenter';
 import { DEFAULT_CONFIG, parseReviewBotConfig } from './config';
@@ -14,7 +15,7 @@ export type ReviewJob = {
  * Fetches per-repo config from .reviewbot.yml if it exists, falls back to defaults.
  */
 async function loadRepoConfig(
-  octokit: Awaited<ReturnType<typeof createOctokitClient>>,
+  octokit: Octokit,
   owner: string,
   repo: string,
   ref: string
@@ -39,14 +40,14 @@ async function loadRepoConfig(
 
 /**
  * Processes a PR review job end-to-end:
- * 1. Load repo config (.reviewbot.yml)
- * 2. Run Claude AI review
- * 3. Post review comments to GitHub
+ * 1. Obtain an installation-scoped GitHub token via App JWT auth
+ * 2. Load repo config (.reviewbot.yml)
+ * 3. Run Claude AI review
+ * 4. Post review comments to GitHub
  */
 export async function enqueueReviewJob(job: ReviewJob): Promise<void> {
-  const { pr } = job;
-  const token = process.env.GITHUB_INSTALLATION_TOKEN ?? '';
-  const octokit = createOctokitClient(token);
+  const { pr, installationId } = job;
+  const octokit = await createInstallationClient(installationId);
 
   const config = await loadRepoConfig(octokit, pr.owner, pr.repo, pr.headSha);
 
