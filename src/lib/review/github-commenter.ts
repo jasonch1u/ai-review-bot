@@ -2,6 +2,47 @@ import type { Octokit } from '@octokit/rest';
 import type { ReviewResult } from './types';
 import type { PullRequestInfo } from '@/lib/github/pr-diff';
 
+/**
+ * Parses a unified diff and returns a Set of "filePath:lineNumber" strings
+ * representing added/changed lines on the RIGHT side of the diff.
+ * Only these lines are valid targets for GitHub inline review comments.
+ */
+export function extractAddedLines(diff: string): ReadonlySet<string> {
+  const validLines = new Set<string>();
+  const lines = diff.split('\n');
+  let currentFile: string | null = null;
+  let newLineNum = 0;
+
+  let inHunk = false;
+
+  for (const line of lines) {
+    if (line.startsWith('diff --git ')) {
+      const match = /diff --git a\/.+ b\/(.+)/.exec(line);
+      currentFile = match ? match[1] : null;
+      newLineNum = 0;
+      inHunk = false;
+    } else if (line.startsWith('@@')) {
+      // Parse @@ -old_start[,old_count] +new_start[,new_count] @@
+      const match = /@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (match) {
+        newLineNum = parseInt(match[1], 10) - 1; // incremented before use below
+        inHunk = true;
+      }
+    } else if (currentFile !== null && inHunk) {
+      if (line.startsWith('+')) {
+        newLineNum++;
+        validLines.add(`${currentFile}:${newLineNum}`);
+      } else if (!line.startsWith('-')) {
+        // Context line: advance the new-side counter
+        newLineNum++;
+      }
+      // Deleted lines (starting with '-') don't advance new-side counter
+    }
+  }
+
+  return validLines;
+}
+
 const SEVERITY_EMOJI: Record<string, string> = {
   critical: '🚨',
   warning: '⚠️',
@@ -18,6 +59,8 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 /**
  * Posts the review result as a GitHub PR review with inline comments.
+ * Filters comments to only those targeting valid diff lines to avoid
+ * GitHub API rejections.
  */
 export async function postReviewToPullRequest(
   octokit: Octokit,
@@ -26,14 +69,27 @@ export async function postReviewToPullRequest(
 ): Promise<void> {
   const { owner, repo, pullNumber, headSha } = pr;
 
-  const inlineComments = review.comments.map((comment) => ({
+  // Only comment on lines that are actually part of this diff
+  const validLines = extractAddedLines(pr.diff);
+  const validComments = review.comments.filter((c) =>
+    validLines.has(`${c.filePath}:${c.line}`)
+  );
+
+  const skipped = review.comments.length - validComments.length;
+  if (skipped > 0) {
+    console.log(
+      `[github-commenter] Skipped ${skipped} comment(s) targeting lines not in diff for ${owner}/${repo}#${pullNumber}`
+    );
+  }
+
+  const inlineComments = validComments.map((comment) => ({
     path: comment.filePath,
     line: comment.line,
     side: 'RIGHT' as const,
     body: formatInlineComment(comment),
   }));
 
-  const reviewBody = formatReviewSummary(review);
+  const reviewBody = formatReviewSummary({ ...review, comments: validComments });
 
   await octokit.pulls.createReview({
     owner,
