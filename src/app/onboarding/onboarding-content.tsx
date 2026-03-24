@@ -68,22 +68,20 @@ export default function OnboardingContent() {
         </p>
         <pre className="mt-4 overflow-x-auto rounded-xl bg-gray-900 p-5 text-sm leading-6 text-gray-100">
           {`# .reviewbot.yml
-version: 1
 
-# Categories to enable
-categories:
-  bugs: true
-  security: true
-  performance: true
-  style: false        # set to true if you want style suggestions
-  suggestions: true
+# Categories to review (bug, security, performance, style, suggestion)
+enabledCategories:
+  - bug
+  - security
+  - performance
+  - suggestion
+  # - style   # uncomment to enable style suggestions
 
-# Severity threshold — only post comments at this level or above
-# Options: critical | warning | suggestion
-min_severity: warning
+# Maximum number of review comments per PR
+maxComments: 20
 
 # Paths to ignore (supports globs)
-ignore:
+ignorePatterns:
   - "**/*.lock"
   - "node_modules/**"
   - "dist/**"
